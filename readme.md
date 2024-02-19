@@ -1,5 +1,6 @@
 #Project Directory
 
+```
 text-to-image-unet/
 ├── dataset/
 │   ├── images/
@@ -13,6 +14,8 @@ text-to-image-unet/
 ├── train.py
 ├── generate.py
 └── app.py 
+
+```
 
 ## Errors while Running train.py
 
