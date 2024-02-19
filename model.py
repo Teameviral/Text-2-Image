@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class DoubleConv(nn.Module):
+    """Two Convolutions + ReLU block"""
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.conv = nn.Sequential(
@@ -23,23 +24,60 @@ class TextProcessingModule(nn.Module):
 
     def forward(self, text_features):
         try:
+            # If text_features is a dictionary
             input_ids = text_features.get('input_ids')
             attention_mask = text_features.get('attention_mask')
 
             if input_ids is None or attention_mask is None:
                 raise ValueError("Invalid format for text_features")
 
+            # Concatenate input_ids and attention_mask before passing to the linear layer
             combined_input = torch.cat((input_ids, attention_mask), dim=-1)
+
+            # Ensure the combined_input has the correct data type
             combined_input = combined_input.float()
+
+            # Flatten the combined_input to match the linear layer input size
             reshaped_input = combined_input.view(combined_input.size(0), -1)
 
+            # Dynamically adjust the size of the linear layer
+            self.fc = nn.Linear(reshaped_input.size(1), self.fc.out_features)
+
+            # Pass through the linear layer
+            output = self.fc(reshaped_input)
+
+            # Define x7 here (size may vary based on your model structure)
+            x7 = torch.zeros_like(output)  # Update with the correct size
+
+            # Expand processed_text dimensions to match x7
+            processed_text = output.unsqueeze(-1).unsqueeze(-1).expand_as(x7)
+
         except AttributeError:
+            # If text_features is not a dictionary, assume it's a tensor
             input_ids = text_features
             attention_mask = None
+
+            # Flatten the input_ids to match the linear layer input size
             reshaped_input = input_ids.view(input_ids.size(0), -1)
 
-        output = self.fc(reshaped_input)
-        return self.relu(output)
+            # Dynamically adjust the size of the linear layer
+            self.fc = nn.Linear(reshaped_input.size(1), self.fc.out_features)
+
+            # Pass through the linear layer
+            output = self.fc(reshaped_input)
+
+            # Define x7 here (size may vary based on your model structure)
+            x7 = torch.zeros_like(output)  # Update with the correct size
+
+            # Expand processed_text dimensions to match x7
+            processed_text = output.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, x7.size(2), x7.size(3)).contiguous()
+
+
+
+        return self.relu(processed_text)
+
+
+
 
 class UNet(nn.Module):
     def __init__(self, in_channels=3, out_channels=3, text_input_size=512, text_output_size=256):
@@ -55,16 +93,9 @@ class UNet(nn.Module):
         # Text Processing Module
         self.text_module = TextProcessingModule(text_input_size, text_output_size)
 
-        # Initialize the linear layer with dynamic input size
-        sample_text_features = {'input_ids': torch.zeros(1, 1, 30), 'attention_mask': torch.zeros(1, 1, 30)}
-        sample_processed_text = self.text_module(sample_text_features)
-
-        # Get the size of the processed text dynamically
-        text_output_size_dynamic = sample_processed_text.view(sample_processed_text.size(0), -1).size(1)
-
         # Decoder (Upsampling)
-        self.up1 = nn.ConvTranspose2d(512 + text_output_size_dynamic, 256, kernel_size=2, stride=2)
-        self.conv1 = DoubleConv(512 + text_output_size_dynamic, 256)  # Skip Connection
+        self.up1 = nn.ConvTranspose2d(512 + text_output_size, 256, kernel_size=2, stride=2)
+        self.conv1 = DoubleConv(512 + text_output_size, 256)  # Skip Connection
         self.up2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
         self.conv2 = DoubleConv(256, 128)
         self.up3 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
@@ -73,7 +104,7 @@ class UNet(nn.Module):
         self.conv4 = DoubleConv(64, out_channels)
 
         # Linear layer
-        self.fc = nn.Linear(text_output_size_dynamic, out_channels)
+        self.fc = nn.Linear(512 * 7 * 7, out_channels)
 
     def forward(self, x, text_features):
         # Encoder steps
